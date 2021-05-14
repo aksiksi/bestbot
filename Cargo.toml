@@ -1,0 +1,9 @@
+[package]
+name = "bestbot"
+version = "0.1.0"
+authors = ["Assil Ksiksi <cyph0nik@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+fantoccini = "0.17.3"
+tokio = { version = "1", features = ["default", "macros", "rt-multi-thread"] }
