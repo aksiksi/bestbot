@@ -7,3 +7,7 @@ edition = "2018"
 [dependencies]
 fantoccini = "0.17.3"
 tokio = { version = "1", features = ["default", "macros", "rt-multi-thread"] }
+structopt = "0.3"
+anyhow = "1"
+rusty-money = "0.4"
+futures = "0.3.15"
