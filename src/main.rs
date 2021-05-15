@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 mod bestbuy;
+mod gmail;
 
 use bestbuy::BestBuyBot;
 

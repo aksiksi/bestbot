@@ -1,13 +1,18 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use fantoccini::Locator;
+use regex::Regex;
 use rusty_money::{Money, iso};
 use tokio::time::sleep;
 
+use crate::gmail::GmailClient;
+
 static CART_URL: &str = "https://www.bestbuy.com/cart";
 static SIGN_IN_URL: &str = "https://www.bestbuy.com/identity/global/signin";
+static EMAIL_CODE_PAT: &str = r#"<span.+>(\d+)</span>"#;
 
 #[derive(Clone, Copy, Debug)]
 enum ClientState {
@@ -22,6 +27,8 @@ enum ClientState {
 #[derive(Clone)]
 struct BotClient {
     client: fantoccini::Client,
+    gmail_client: Arc<GmailClient>,
+    username: String,
     state: ClientState,
 }
 
@@ -36,9 +43,11 @@ impl BotClient {
     const CART_CHECKOUT_BTN_SEL: &'static str = r#"div.checkout-buttons__checkout > button"#;
     const CART_CHECKOUT_PP_BTN_SEL: &'static str = r#"div.checkout-buttons__container > button.checkout-buttons__paypal"#;
 
-    fn new(client: fantoccini::Client) -> Self {
+    fn new(client: fantoccini::Client, gmail_client: GmailClient, username: String) -> Self {
         Self {
             client,
+            gmail_client: Arc::new(gmail_client),
+            username,
             state: ClientState::Started,
         }
     }
@@ -152,12 +161,26 @@ impl BotClient {
         Ok(ClientState::CartUpdated)
     }
 
+    /// Get latest email code using Gmail API
+    async fn get_email_code(&self) -> Result<String> {
+        let messages = self.gmail_client
+            .list_messages(&self.username, "BestBuy", None)
+            .await?;
+        let latest_message = messages[0].id.as_ref().unwrap();
+
+        let body = self.gmail_client.get_message_body(&self.username, latest_message).await?;
+        let code_pat = Regex::new(EMAIL_CODE_PAT)?;
+        let code = code_pat.captures(&body).unwrap().get(1).unwrap().as_str().to_owned();
+
+        Ok(code)
+    }
+
     /// Purchase whatever is in the cart.
     async fn checkout(&mut self, paypal: bool) -> Result<ClientState> {
         self.open_cart().await?;
         self.client.wait_for_find(Locator::Css(Self::CART_CHECKOUT_BTN_SEL)).await?;
 
-        let checkout_btn_locator = if paypal {
+        let checkout_btn_locator = if !paypal {
             Locator::Css(Self::CART_CHECKOUT_BTN_SEL)
         } else {
             Locator::Css(Self::CART_CHECKOUT_PP_BTN_SEL)
@@ -166,6 +189,10 @@ impl BotClient {
         let checkout_btn = self.client.find(checkout_btn_locator).await?;
 
         checkout_btn.click().await?;
+        self.client.wait_for_navigation(None).await?;
+
+        let code = self.get_email_code().await?;
+        println!("Code: {}", code);
 
         Ok(ClientState::Purchased)
     }
@@ -195,7 +222,7 @@ impl BotClient {
     }
 }
 
-/// A single instance of a Best Buy bot.
+/// A single instance of a BestBuy bot.
 ///
 /// Each bot checks the given list of products on every tick and adds
 /// all available to the cart before checking out.
@@ -233,10 +260,15 @@ impl BestBuyBot {
     }
 
     pub async fn start(&mut self) -> Result<()> {
+        let app_secret_path = format!("{}-secret.json", self.username);
+        let token_persist_path = format!("{}-token.json", self.username);
+        let gmail_client = GmailClient::new(&app_secret_path, &token_persist_path).await?;
+
         let client = fantoccini::ClientBuilder::native()
             .connect(&self.hostname)
             .await?;
-        let mut client = BotClient::new(client);
+
+        let mut client = BotClient::new(client, gmail_client, self.username.clone());
 
         while self.product_urls.len() > 0 {
             let num_urls = self.product_urls.len();
