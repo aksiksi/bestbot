@@ -1,17 +1,29 @@
-use std::time::Duration;
+use std::path::PathBuf;
 
 use anyhow::Result;
+use structopt::StructOpt;
 
 mod bestbuy;
+mod config;
 mod gmail;
 
 use bestbuy::BestBuyBot;
 
+#[derive(StructOpt)]
+struct Args {
+    config_file: PathBuf,
+
+    #[structopt(long)]
+    dry_run: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut bot = BestBuyBot::new(Duration::from_secs(10), None);
-    bot.add_product("https://www.bestbuy.com/site/sony-playstation-5-console/6426149.p?skuId=6426149".to_string());
-    bot.add_product("https://www.bestbuy.com/site/macbook-air-13-3-laptop-apple-m1-chip-8gb-memory-256gb-ssd-latest-model-gold/6418599.p?skuId=6418599".to_string());
+    let args = Args::from_args();
+    let config = config::Config::load(args.config_file)?;
+    let mut bot = BestBuyBot::new(config, args.dry_run);
+
     bot.start().await?;
+
     Ok(())
 }
