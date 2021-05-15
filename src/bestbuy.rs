@@ -106,6 +106,7 @@ impl BotClient {
 
     /// Open the cart page
     async fn open_cart(&mut self) -> Result<()> {
+        log::debug!("Opening cart...");
         self.client.goto(CART_URL).await?;
         self.client.wait_for_find(Locator::Css(Self::CART_READY_TEXT_SEL)).await?;
         Ok(())
@@ -120,6 +121,8 @@ impl BotClient {
 
         self.open_cart().await?;
 
+        log::debug!("Clearing cart...");
+
         // Find all of the remove buttons on the cart page
         let remove_btns =
             self.client.find_all(Locator::Css(Self::REMOVE_CART_LINK_SEL)).await?;
@@ -129,11 +132,15 @@ impl BotClient {
             sleep(Duration::from_millis(1000)).await;
         }
 
+        log::debug!("Cart cleared");
+
         Ok(())
     }
 
     /// Sign in to BestBuy
     async fn sign_in(&mut self, username: &str, password: &str) -> Result<BotClientState> {
+        log::debug!("Signing in...");
+
         self.client.goto(SIGN_IN_URL).await?;
 
         self.client.wait_for_find(Locator::Css(Self::USERNAME_SEL)).await?;
@@ -159,8 +166,7 @@ impl BotClient {
         submit.click().await?;
         self.client.wait_for_navigation(None).await?;
 
-        // Clear the cart after logging in
-        self.clear_cart().await?;
+        log::info!("Signed in successfully");
 
         Ok(BotClientState::SignedIn)
     }
@@ -180,6 +186,8 @@ impl BotClient {
 
     /// Check if a product is in stock. If yes, add it to the cart.
     async fn check_product(&mut self, product_url: &str) -> Result<BotClientState> {
+        log::debug!("Checking product");
+
         self.client.goto(product_url).await?;
 
         self.client.wait_for_find(Locator::Css(Self::ADD_TO_CART_BTN_SEL)).await?;
@@ -235,6 +243,8 @@ impl BotClient {
         let code_pat = Regex::new(EMAIL_CODE_PAT)?;
         let code = code_pat.captures(&body).unwrap().get(1).unwrap().as_str().to_owned();
 
+        log::info!("Email code: {}", code);
+
         Ok(code)
     }
 
@@ -246,6 +256,8 @@ impl BotClient {
             return Ok(());
         }
 
+        log::info!("Email verification required");
+
         let form = self.client
             .form(Locator::Css(Self::VERIFICATION_CODE_FORM))
             .await?;
@@ -254,8 +266,6 @@ impl BotClient {
         // Get the verifcation code from Gmail
         let code = self.get_email_code().await?;
         input.send_keys(&code).await?;
-
-        log::info!("Email code: {}", code);
 
         // Submit the form
         form.submit().await?;
@@ -266,6 +276,8 @@ impl BotClient {
 
     /// Handles the fulfillment page (first step in checkout).
     async fn fulfillment(&mut self) -> Result<()> {
+        log::debug!("Starting fulfillment flow...");
+
         // Wait for page to load
         self.client.wait_for_find(Locator::Css(Self::CHECKOUT_PAGE_READY_SEL)).await?;
 
@@ -273,6 +285,8 @@ impl BotClient {
             self.is_element_present(Self::CHECKOUT_PAGE_SHIPPING_SEL).await?;
 
         if shippping_info_required {
+            log::info!("Entering shipping info...");
+
             self.client.wait_for_find(Locator::Css(Self::SHIPPING_ADDRESS_FIRST_NAME_SEL)).await?;
 
             let mut first_name_input = self.find_element(Self::SHIPPING_ADDRESS_FIRST_NAME_SEL).await?;
@@ -297,11 +311,15 @@ impl BotClient {
         continue_btn.click().await?;
         self.client.wait_for_navigation(None).await?;
 
+        log::debug!("Fulfillment flow completed");
+
         Ok(())
     }
 
     /// Handles the payment page (second step in checkout).
     async fn payment(&mut self) -> Result<()> {
+        log::debug!("Starting payment flow...");
+
         // Wait for payment page to load
         self.client.wait_for_find(Locator::Css(Self::PAYMENT_CC_INPUT_SEL)).await?;
 
@@ -341,6 +359,9 @@ impl BotClient {
             let order_btn = self.find_element(Self::PAYMENT_PLACE_ORDER_SEL).await?;
             order_btn.click().await?;
             self.client.wait_for_navigation(None).await?;
+            log::info!("Order placed!");
+        } else {
+            log::info!("Dry run; stopping here");
         }
 
         Ok(())
@@ -348,6 +369,8 @@ impl BotClient {
 
     /// Purchase whatever is in the cart.
     async fn checkout(&mut self) -> Result<BotClientState> {
+        log::debug!("Starting checkout flow...");
+
         self.open_cart().await?;
         self.client.wait_for_find(Locator::Css(Self::CART_CHECKOUT_BTN_SEL)).await?;
 
@@ -358,11 +381,10 @@ impl BotClient {
         checkout_btn.click().await?;
         self.client.wait_for_navigation(None).await?;
 
-        // Check for verification code and input if needed
-        self.verify_code().await?;
-
         self.fulfillment().await?;
         self.payment().await?;
+
+        log::debug!("Checkout flow completed");
 
         Ok(BotClientState::Purchased)
     }
@@ -370,8 +392,17 @@ impl BotClient {
     /// Run the client to completion.
     async fn run(&mut self, product_url: &str, username: &str, password: &str, checkout: bool) -> Result<BotClientState> {
         loop {
+            // Prior to executing a step, check if we hit the email verification
+            self.verify_code().await?;
+
+            // Figure out what to do next based on current state
             match self.state {
-                BotClientState::Started => self.state = self.sign_in(username, password).await?,
+                BotClientState::Started => {
+                    self.state = self.sign_in(username, password).await?;
+
+                    // Clear the cart after signing in
+                    self.clear_cart().await?;
+                }
                 BotClientState::SignedIn => self.state = self.check_product(product_url).await?,
                 BotClientState::CartUpdated => {
                     if checkout {
@@ -452,6 +483,8 @@ impl BestBuyBot {
 
         let client = client.connect(&self.hostname).await?;
 
+        log::debug!("Connected to Webdriver");
+
         // Create the bot client
         let mut client = BotClient::new(
             client,
@@ -476,6 +509,8 @@ impl BestBuyBot {
                     };
                 }
             }
+
+            log::debug!("Sleeping for {:?}", self.interval);
 
             sleep(self.interval).await;
         }
