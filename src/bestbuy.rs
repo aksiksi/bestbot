@@ -42,6 +42,7 @@ impl BotClient {
     const PASSWORD_SEL: &'static str = r#"#fld-p1"#;
     const SUBMIT_SEL: &'static str = r#"div.cia-form__controls > button"#;
     const PRODUCT_PRICE_SEL: &'static str = r#"div.priceView-customer-price > span"#;
+    const PRODUCT_TITLE_SEL: &'static str = r#"div.sku-title"#;
     const CART_READY_TEXT_SEL: &'static str = r#"h2.order-summary__heading"#;
     const ADD_TO_CART_BTN_SEL: &'static str = r#"div.fulfillment-add-to-cart-button button"#;
     const REMOVE_CART_LINK_SEL: &'static str = r#"a.cart-item__remove"#;
@@ -171,7 +172,7 @@ impl BotClient {
                 .find(Locator::Css(".close-modal-x"))
                 .await?;
             btn.click().await?;
-            println!("Closed modal");
+            log::debug!("Closed modal");
         }
 
         Ok(())
@@ -184,17 +185,21 @@ impl BotClient {
         self.client.wait_for_find(Locator::Css(Self::ADD_TO_CART_BTN_SEL)).await?;
         self.client.wait_for_find(Locator::Css(Self::PRODUCT_PRICE_SEL)).await?;
 
-        let mut price_elem = self.client
-            .find(Locator::Css(Self::PRODUCT_PRICE_SEL))
-            .await?;
+        let mut price_elem = self.find_element(Self::PRODUCT_PRICE_SEL).await?;
         let price = price_elem
             .prop("innerText")
             .await?
             // Sane default price
             .unwrap_or_else(|| "9999999".to_string());
-
         let price = Money::from_str(&price.replace("$", ""), iso::USD)?;
-        println!("{}", price);
+
+        let mut product_title_elem = self.find_element(Self::PRODUCT_TITLE_SEL).await?;
+        let product_title = product_title_elem
+            .prop("innerText")
+            .await?
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        log::info!("Product: {}, Price: {}", product_title, price);
 
         let mut add_to_cart_btn = self.client
             .find(Locator::Css(Self::ADD_TO_CART_BTN_SEL))
@@ -203,8 +208,10 @@ impl BotClient {
         // If the product is sold out, stop here
         let is_sold_out = add_to_cart_btn.text().await?.to_lowercase() == "sold out";
         if is_sold_out {
-            println!("Currently sold out...");
+            log::info!("Currently sold out...");
             return Ok(BotClientState::NotInStock);
+        } else {
+            log::info!("Adding to cart...");
         }
 
         // Add this product to the cart
@@ -248,7 +255,7 @@ impl BotClient {
         let code = self.get_email_code().await?;
         input.send_keys(&code).await?;
 
-        println!("Code: {}", code);
+        log::info!("Email code: {}", code);
 
         // Submit the form
         form.submit().await?;
@@ -399,17 +406,16 @@ pub struct BestBuyBot {
     product_urls: VecDeque<String>,
     payment_info: PaymentInfo,
     shipping_address: Address,
-    dry_run: bool,
 }
 
 impl BestBuyBot {
-    pub fn new(config: Config, dry_run: bool) -> Self {
+    pub fn new(config: Config) -> Self {
         let login_info = config.login_info.unwrap();
         let username = login_info.username;
         let password = login_info.password;
         let hostname = config.hostname.unwrap_or_else(|| "http://localhost:4444".to_string());
         let interval = Duration::from_secs(config.interval.unwrap_or(20));
-        let product_urls = config.products.into_iter();
+        let product_urls = VecDeque::from_iter(config.products.into_iter());
         let working_dir = config.working_dir.unwrap_or_else(|| String::new());
         let payment_info = config.payment_info;
         let shipping_address = config.shipping_address.unwrap();
@@ -420,34 +426,40 @@ impl BestBuyBot {
             password,
             hostname,
             working_dir,
-            product_urls: VecDeque::from_iter(product_urls),
+            product_urls,
             payment_info,
             shipping_address,
-            dry_run,
         }
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(&mut self, dry_run: bool, headless: bool) -> Result<()> {
         // Setup the Gmail API client
-        let app_secret_name = format!("{}-secret.json", self.username);
+        let app_secret_name = "gmail-api-secret.json";
         let token_persist_name = format!("{}-token.json", self.username);
         let app_secret_path = PathBuf::new().join(&self.working_dir).join(app_secret_name);
         let token_persist_path = PathBuf::new().join(&self.working_dir).join(token_persist_name);
         let gmail_client = GmailClient::new(&app_secret_path, &token_persist_path).await?;
 
         // Setup the Webdriver client
-        let client = fantoccini::ClientBuilder::native()
-            .connect(&self.hostname)
-            .await?;
+        let mut client = fantoccini::ClientBuilder::native();
 
-        // Create a BestBuy bot client
+        if headless {
+            let mut caps = serde_json::map::Map::new();
+            let args = serde_json::json!({"args": ["--headless", "--disable-gpu"]});
+            caps.insert("goog:chromeOptions".to_string(), args);
+            client.capabilities(caps);
+        }
+
+        let client = client.connect(&self.hostname).await?;
+
+        // Create the bot client
         let mut client = BotClient::new(
             client,
             gmail_client,
             self.username.clone(),
             self.payment_info.clone(),
             self.shipping_address.clone(),
-            self.dry_run,
+            dry_run,
         );
 
         while self.product_urls.len() > 0 {

@@ -12,18 +12,21 @@ use bestbuy::BestBuyBot;
 #[derive(StructOpt)]
 struct Args {
     config_file: PathBuf,
-
     #[structopt(long)]
     dry_run: bool,
+    #[structopt(long)]
+    headless: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
+
     let args = Args::from_args();
     let config = config::Config::load(args.config_file)?;
-    let mut bot = BestBuyBot::new(config, args.dry_run);
+    let mut bot = BestBuyBot::new(config);
 
-    bot.start().await?;
+    bot.start(args.dry_run, args.headless).await?;
 
     Ok(())
 }

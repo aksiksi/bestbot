@@ -11,3 +11,4 @@ A simple Bestbuy bot written in Rust.  Work in progress.
 
 ## Design
 
+TBD
