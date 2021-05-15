@@ -1,16 +1,16 @@
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::Result;
 use fantoccini::Locator;
-use futures::{TryStreamExt, stream::FuturesUnordered};
 use rusty_money::{Money, iso};
 use tokio::time::sleep;
 
+static CART_URL: &str = "https://www.bestbuy.com/cart";
 static SIGN_IN_URL: &str = "https://www.bestbuy.com/identity/global/signin";
 
 #[derive(Clone, Copy, Debug)]
 enum ClientState {
-    None,
     Started,
     SignedIn,
     CartUpdated,
@@ -19,12 +19,9 @@ enum ClientState {
     Errored,
 }
 
+#[derive(Clone)]
 struct BotClient {
-    username: String,
-    password: String,
-    product_url: String,
-    hostname: String,
-    client: Option<fantoccini::Client>,
+    client: fantoccini::Client,
     state: ClientState,
 }
 
@@ -33,69 +30,81 @@ impl BotClient {
     const PASSWORD_SEL: &'static str = r#"#fld-p1"#;
     const SUBMIT_SEL: &'static str = r#"div.cia-form__controls > button"#;
     const PRODUCT_PRICE_SEL: &'static str = r#"div.priceView-customer-price > span"#;
+    const CART_READY_TEXT_SEL: &'static str = r#"h2.order-summary__heading"#;
     const ADD_TO_CART_BTN_SEL: &'static str = r#"div.fulfillment-add-to-cart-button button"#;
+    const REMOVE_CART_LINK_SEL: &'static str = r#"a.cart-item__remove"#;
+    const CART_CHECKOUT_BTN_SEL: &'static str = r#"div.checkout-buttons__checkout > button"#;
+    const CART_CHECKOUT_PP_BTN_SEL: &'static str = r#"div.checkout-buttons__container > button.checkout-buttons__paypal"#;
 
-    /// Creates a new browser client.
-    fn new(username: String, password: String, product_url: String, hostname: Option<&str>) -> Self {
-        let hostname = hostname.unwrap_or("http://localhost:4444").to_string();
+    fn new(client: fantoccini::Client) -> Self {
         Self {
-            username,
-            password,
-            product_url,
-            hostname,
-            client: None,
-            state: ClientState::None,
+            client,
+            state: ClientState::Started,
         }
     }
 
-    async fn init(&mut self) -> Result<ClientState> {
-        let client = fantoccini::ClientBuilder::native()
-            .connect(&self.hostname)
-            .await?;
-        self.client = Some(client);
-        Ok(ClientState::Started)
+    /// Open the cart page
+    async fn open_cart(&mut self) -> Result<()> {
+        self.client.goto(CART_URL).await?;
+        self.client.wait_for_find(Locator::Css(Self::CART_READY_TEXT_SEL)).await?;
+        Ok(())
+    }
+
+    /// Clear everything in the cart
+    async fn clear_cart(&mut self) -> Result<()> {
+        self.open_cart().await?;
+
+        // Find all of the remove buttons on the cart page
+        let remove_btns =
+            self.client.find_all(Locator::Css(Self::REMOVE_CART_LINK_SEL)).await?;
+
+        for btn in remove_btns.into_iter() {
+            btn.click().await?;
+            sleep(Duration::from_millis(1000)).await;
+        }
+
+        Ok(())
     }
 
     /// Sign in to BestBuy
-    async fn sign_in(&mut self) -> Result<ClientState> {
-        let client = self.client.as_mut().unwrap();
+    async fn sign_in(&mut self, username: &str, password: &str) -> Result<ClientState> {
+        self.client.goto(SIGN_IN_URL).await?;
 
-        client.goto(SIGN_IN_URL).await?;
+        self.client.wait_for_find(Locator::Css(Self::USERNAME_SEL)).await?;
+        self.client.wait_for_find(Locator::Css(Self::PASSWORD_SEL)).await?;
+        self.client.wait_for_find(Locator::Css(Self::SUBMIT_SEL)).await?;
 
-        client.wait_for_find(Locator::Css(Self::USERNAME_SEL)).await?;
-        client.wait_for_find(Locator::Css(Self::PASSWORD_SEL)).await?;
-        client.wait_for_find(Locator::Css(Self::SUBMIT_SEL)).await?;
-
-        let mut username = client.find(
+        let mut username_input = self.client.find(
             Locator::Css(Self::USERNAME_SEL)
         ).await?;
-        let mut password = client.find(
+        let mut password_input = self.client.find(
             Locator::Css(Self::PASSWORD_SEL)
         ).await?;
-        let submit = client.find(
+        let submit = self.client.find(
             Locator::Css(Self::SUBMIT_SEL)
         ).await?;
 
-        username.send_keys(&self.username).await?;
-        password.send_keys(&self.password).await?;
+        username_input.send_keys(username).await?;
+        password_input.send_keys(password).await?;
 
         // Submit the login form and wait for the new page to load
         submit.click().await?;
-        client.wait_for_navigation(None).await?;
+        self.client.wait_for_navigation(None).await?;
+
+        // Clear the cart
+        self.clear_cart().await?;
 
         Ok(ClientState::SignedIn)
     }
 
     /// Check if a product is in stock. If yes, add it to the cart.
-    async fn check_product(&mut self) -> Result<ClientState> {
-        let client = self.client.as_mut().unwrap();
+    async fn check_product(&mut self, product_url: &str) -> Result<ClientState> {
+        self.client.goto(product_url).await?;
 
-        client.goto(&self.product_url).await?;
+        self.client.wait_for_find(Locator::Css(Self::ADD_TO_CART_BTN_SEL)).await?;
+        self.client.wait_for_find(Locator::Css(Self::PRODUCT_PRICE_SEL)).await?;
 
-        client.wait_for_find(Locator::Css(Self::ADD_TO_CART_BTN_SEL)).await?;
-        client.wait_for_find(Locator::Css(Self::PRODUCT_PRICE_SEL)).await?;
-
-        let mut price_elem = client
+        let mut price_elem = self.client
             .find(Locator::Css(Self::PRODUCT_PRICE_SEL))
             .await?;
         let price = price_elem
@@ -107,7 +116,7 @@ impl BotClient {
         let price = Money::from_str(&price.replace("$", ""), iso::USD)?;
         println!("{}", price);
 
-        let mut add_to_cart_btn = client
+        let mut add_to_cart_btn = self.client
             .find(Locator::Css(Self::ADD_TO_CART_BTN_SEL))
             .await?;
 
@@ -123,7 +132,7 @@ impl BotClient {
         sleep(Duration::from_millis(1000)).await;
 
         // Figure out if we have a modal. If we do, close it.
-        let close_modal_btn = client
+        let close_modal_btn = self.client
             .find(Locator::Css(".close-modal-x"))
             .await;
         let close_modal_btn = if close_modal_btn.is_err() {
@@ -144,59 +153,62 @@ impl BotClient {
     }
 
     /// Purchase whatever is in the cart.
-    async fn purchase(&mut self) -> Result<ClientState> {
+    async fn checkout(&mut self, paypal: bool) -> Result<ClientState> {
+        self.open_cart().await?;
+        self.client.wait_for_find(Locator::Css(Self::CART_CHECKOUT_BTN_SEL)).await?;
+
+        let checkout_btn_locator = if paypal {
+            Locator::Css(Self::CART_CHECKOUT_BTN_SEL)
+        } else {
+            Locator::Css(Self::CART_CHECKOUT_PP_BTN_SEL)
+        };
+
+        let checkout_btn = self.client.find(checkout_btn_locator).await?;
+
+        checkout_btn.click().await?;
+
         Ok(ClientState::Purchased)
     }
 
     /// Run the client to completion.
-    async fn run(&mut self) -> Result<ClientState> {
+    async fn run(&mut self, product_url: &str, username: &str, password: &str, checkout: bool) -> Result<ClientState> {
         loop {
             match self.state {
-                ClientState::None => self.state = self.init().await?,
-                ClientState::Started => self.state = self.sign_in().await?,
-                ClientState::SignedIn => self.state = self.check_product().await?,
-                ClientState::CartUpdated => self.state = self.purchase().await?,
+                ClientState::Started => self.state = self.sign_in(username, password).await?,
+                ClientState::SignedIn => self.state = self.check_product(product_url).await?,
+                ClientState::CartUpdated => {
+                    if checkout {
+                        self.state = self.checkout(false).await?;
+                    } else {
+                        break;
+                    }
+                }
                 ClientState::Errored | ClientState::NotInStock | ClientState::Purchased => break,
             }
         }
 
-        if let Some(client) = self.client.as_mut() {
-            client.close().await?;
-        }
+        let state = self.state;
 
-        self.client = None;
+        self.state = ClientState::SignedIn;
 
-        Ok(self.state)
+        Ok(state)
     }
 }
 
+/// A single instance of a Best Buy bot.
+///
+/// Each bot checks the given list of products on every tick and adds
+/// all available to the cart before checking out.
 pub struct BestBuyBot {
     interval: Duration,
-    num_clients: usize,
-    product_urls: Vec<String>,
+    username: String,
+    password: String,
+    hostname: String,
+    product_urls: VecDeque<String>,
 }
 
 impl BestBuyBot {
-    pub fn new(interval: Duration, num_clients: Option<usize>) -> Self {
-        let num_clients = if let Some(n) = num_clients {
-            assert!(n > 0);
-            n
-        } else {
-            4
-        };
-
-        Self {
-            interval,
-            num_clients,
-            product_urls: vec![],
-        }
-    }
-
-    pub fn add_product(&mut self, product_id: String) {
-        self.product_urls.push(product_id);
-    }
-
-    pub fn start(&mut self) -> Result<()> {
+    pub fn new(interval: Duration, hostname: Option<&str>) -> Self {
         let username = match std::env::var("BESTBOT_USERNAME") {
             Ok(u) => u,
             Err(_) => panic!("BESTBOT_USERNAME env variable not set"),
@@ -205,47 +217,49 @@ impl BestBuyBot {
             Ok(u) => u,
             Err(_) => panic!("BESTBOT_PASSWORD env variable not set"),
         };
+        let hostname = hostname.unwrap_or("http://localhost:4444").to_string();
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?;
-        let num_clients = std::cmp::min(self.num_clients, self.product_urls.len());
+        Self {
+            interval,
+            username,
+            password,
+            hostname,
+            product_urls: VecDeque::new(),
+        }
+    }
 
-        let mut products = self.product_urls.iter().cycle();
+    pub fn add_product(&mut self, product_url: String) {
+        self.product_urls.push_back(product_url);
+    }
 
-        loop {
-            // Build a list of product URLs to check
-            let mut product_urls = Vec::new();
-            for p in &mut products {
-                product_urls.push(p.clone());
-                if product_urls.len() == num_clients {
-                    break;
+    pub async fn start(&mut self) -> Result<()> {
+        let client = fantoccini::ClientBuilder::native()
+            .connect(&self.hostname)
+            .await?;
+        let mut client = BotClient::new(client);
+
+        while self.product_urls.len() > 0 {
+            let num_urls = self.product_urls.len();
+            let mut cart_updated = false;
+
+            for _ in 0..num_urls {
+                if let Some(product_url) = self.product_urls.pop_front() {
+                    match client.run(&product_url, &self.username, &self.password, false).await? {
+                        ClientState::CartUpdated => cart_updated = true,
+                        _ => self.product_urls.push_back(product_url),
+                    };
                 }
             }
 
-            // Create a new client for each product
-            let mut clients: Vec<_> = product_urls
-                .into_iter()
-                .map(|product_url: String| {
-                    BotClient::new(username.clone(), password.clone(), product_url, None)
-                })
-                .collect();
+            if cart_updated {
+                // Checkout now
+                println!("Checking out...");
+                client.checkout(false).await?;
+            }
 
-            // Wait for all clients to terminate
-            rt.block_on(async move {
-                let tasks = clients
-                    .iter_mut()
-                    .map(|client| {
-                        client.run()
-                    })
-                    .collect::<FuturesUnordered<_>>();
-
-                let results: Result<Vec<ClientState>> = tasks.into_stream().try_collect().await;
-
-                dbg!(results.unwrap());
-            });
-
-            std::thread::sleep(self.interval);
+            sleep(self.interval).await;
         }
+
+        Ok(())
     }
 }
