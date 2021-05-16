@@ -5,10 +5,6 @@ ENV TZ="America/New_York"
 
 WORKDIR /var/bestbot
 COPY . .
-RUN cargo install --path .
-
-# Clean the build directory
-RUN cargo clean
 
 # Install dependencies
 RUN apt-get update && \
@@ -18,11 +14,18 @@ RUN apt-get update && \
 
 # Install latest Google Chrome
 # This will likely fail due to missing deps
-RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && dpkg -i google-chrome-stable_current_amd64.deb; exit 0
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
+RUN sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+RUN apt-get -y update && \
+    apt-get install -y google-chrome-stable
+
+# Install latest Google Chrome
+# This will likely fail due to missing deps
+# RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && dpkg -i google-chrome-stable_current_amd64.deb; exit 0
 
 # Install missing Chrome deps
 # NOTE: Needs to be non-interactive to disable the tzdata config prompt
-RUN DEBIAN_FRONTEND="noninteractive" apt-get install -fy
+# RUN DEBIAN_FRONTEND="noninteractive" apt-get install -fy
 
 # Install latest Chromedriver
 RUN a=$(uname -m) && \
@@ -33,6 +36,10 @@ RUN a=$(uname -m) && \
     wget -O /tmp/chromedriver/chromedriver.zip 'http://chromedriver.storage.googleapis.com/'$latest'/chromedriver_linux'$b'.zip' && \
     unzip /tmp/chromedriver/chromedriver.zip chromedriver -d /usr/local/bin/ && \
     rm -rf /tmp/chromedriver
+
+# Build
+RUN cargo install --path .
+RUN cargo clean
 
 # Prepare the config volume
 RUN mkdir /config
