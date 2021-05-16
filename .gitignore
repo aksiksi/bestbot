@@ -1,4 +1,7 @@
 /target
 *.json
 NOTES.md
+CODE.md
 config.toml
+tmp_venv
+demo.py

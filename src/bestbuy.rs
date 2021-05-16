@@ -53,6 +53,7 @@ impl BotClient {
     const CHECKOUT_PAGE_READY_SEL: &'static str = r#"h1.fulfillment__page-title"#;
     const CHECKOUT_PAGE_SHIPPING_SEL: &'static str = r#"div.streamlined__shipping"#;
     const CHECKOUT_PAGE_CONTINUE_SEL: &'static str = r#"div.button--continue > button"#;
+    const CHECKOUT_PAGE_NEW_ADDRESS_SEL: &'static str = r#"button.saved-addresses__add-new-link"#;
     const SHIPPING_ADDRESS_FIRST_NAME_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.firstName']"#;
     const SHIPPING_ADDRESS_LAST_NAME_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.lastName']"#;
     const SHIPPING_ADDRESS_STREET_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.street']"#;
@@ -287,6 +288,12 @@ impl BotClient {
         if shippping_info_required {
             log::info!("Entering shipping info...");
 
+            if self.is_element_present(Self::CHECKOUT_PAGE_NEW_ADDRESS_SEL).await? {
+                log::debug!("Adding a new address");
+                let new_address_btn = self.find_element(Self::CHECKOUT_PAGE_NEW_ADDRESS_SEL).await?;
+                new_address_btn.click().await?;
+            }
+
             self.client.wait_for_find(Locator::Css(Self::SHIPPING_ADDRESS_FIRST_NAME_SEL)).await?;
 
             let mut first_name_input = self.find_element(Self::SHIPPING_ADDRESS_FIRST_NAME_SEL).await?;
@@ -354,14 +361,16 @@ impl BotClient {
         state_input.select_by_value(&self.payment.billing.state).await?;
         zip_input.send_keys(&self.payment.billing.zip_code).await?;
 
-        // Place the order!
-        if !self.dry_run {
+        if self.dry_run {
+            log::info!("Dry run; stopping here");
+        } else {
+            // Place the order!
             let order_btn = self.find_element(Self::PAYMENT_PLACE_ORDER_SEL).await?;
             order_btn.click().await?;
             self.client.wait_for_navigation(None).await?;
             log::info!("Order placed!");
-        } else {
-            log::info!("Dry run; stopping here");
+
+            sleep(Duration::from_secs(10)).await;
         }
 
         Ok(())
