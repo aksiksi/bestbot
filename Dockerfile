@@ -19,14 +19,6 @@ RUN sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable 
 RUN apt-get -y update && \
     apt-get install -y google-chrome-stable
 
-# Install latest Google Chrome
-# This will likely fail due to missing deps
-# RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && dpkg -i google-chrome-stable_current_amd64.deb; exit 0
-
-# Install missing Chrome deps
-# NOTE: Needs to be non-interactive to disable the tzdata config prompt
-# RUN DEBIAN_FRONTEND="noninteractive" apt-get install -fy
-
 # Install latest Chromedriver
 RUN a=$(uname -m) && \
     mkdir /tmp/chromedriver/ && \
