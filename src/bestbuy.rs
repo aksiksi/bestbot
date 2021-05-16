@@ -483,7 +483,7 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
 
         if headless {
             let mut caps = serde_json::map::Map::new();
-            let args = serde_json::json!({"args": ["--headless", "--disable-gpu"]});
+            let args = serde_json::json!({"args": ["--no-sandbox", "--headless", "--disable-gpu"]});
             caps.insert("goog:chromeOptions".to_string(), args);
             client.capabilities(caps);
         }
