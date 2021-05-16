@@ -4,8 +4,10 @@ use anyhow::Result;
 use structopt::StructOpt;
 
 mod bestbuy;
+mod common;
 mod config;
 mod gmail;
+mod walmart;
 
 use bestbuy::BestBuyBot;
 

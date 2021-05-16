@@ -10,6 +10,7 @@ use regex::Regex;
 use rusty_money::{Money, iso};
 use tokio::time::sleep;
 
+use crate::common::BotClientState;
 use crate::config::{Address, Config, PaymentInfo};
 use crate::gmail::GmailClient;
 
@@ -17,17 +18,8 @@ static CART_URL: &str = "https://www.bestbuy.com/cart";
 static SIGN_IN_URL: &str = "https://www.bestbuy.com/identity/global/signin";
 static EMAIL_CODE_PAT: &str = r#"<span.+>(\d+)</span>"#;
 
-#[derive(Clone, Copy, Debug)]
-enum BotClientState {
-    Started,
-    SignedIn,
-    CartUpdated,
-    NotInStock,
-    Purchased,
-}
-
 #[derive(Clone)]
-struct BotClient {
+struct WebdriverBot {
     client: fantoccini::Client,
     gmail_client: Arc<GmailClient>,
     username: String,
@@ -37,7 +29,7 @@ struct BotClient {
     state: BotClientState,
 }
 
-impl BotClient {
+impl WebdriverBot {
     const USERNAME_SEL: &'static str = r#"#fld-e"#;
     const PASSWORD_SEL: &'static str = r#"#fld-p1"#;
     const SUBMIT_SEL: &'static str = r#"div.cia-form__controls > button"#;
@@ -494,8 +486,8 @@ impl BestBuyBot {
 
         log::debug!("Connected to Webdriver");
 
-        // Create the bot client
-        let mut client = BotClient::new(
+        // Create a Webdriver bot for BestBuy
+        let mut client = WebdriverBot::new(
             client,
             gmail_client,
             self.username.clone(),
