@@ -25,7 +25,7 @@ pub struct PaymentInfo {
     pub exp_month: String,
     pub exp_year: String,
     pub cvv: u32,
-    pub billing_address: Address,
+    pub billing: Address,
 }
 
 #[derive(Deserialize)]
@@ -34,9 +34,9 @@ pub struct Config {
     pub hostname: Option<String>,
     pub working_dir: Option<String>,
     pub products: Vec<String>,
-    pub login_info: Option<Login>,
-    pub payment_info: PaymentInfo,
-    pub shipping_address: Option<Address>,
+    pub login: Option<Login>,
+    pub payment: PaymentInfo,
+    pub shipping: Option<Address>,
 }
 
 impl Config {
@@ -46,7 +46,7 @@ impl Config {
 
         assert!(parsed.products.len() > 0, "No products specified!");
 
-        if parsed.login_info.is_none() {
+        if parsed.login.is_none() {
             let username = match std::env::var("BESTBOT_USERNAME") {
                 Ok(u) => u,
                 Err(_) => panic!("BESTBOT_USERNAME env variable not set"),
@@ -61,11 +61,11 @@ impl Config {
                 password,
             };
 
-            parsed.login_info = Some(login_info);
+            parsed.login = Some(login_info);
         }
 
-        if parsed.shipping_address.is_none() {
-            parsed.shipping_address = Some(parsed.payment_info.billing_address.clone());
+        if parsed.shipping.is_none() {
+            parsed.shipping = Some(parsed.payment.billing.clone());
         }
 
         Ok(parsed)

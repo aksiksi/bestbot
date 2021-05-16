@@ -31,8 +31,8 @@ struct BotClient {
     client: fantoccini::Client,
     gmail_client: Arc<GmailClient>,
     username: String,
-    payment_info: PaymentInfo,
-    shipping_address: Address,
+    payment: PaymentInfo,
+    shipping: Address,
     dry_run: bool,
     state: BotClientState,
 }
@@ -76,15 +76,15 @@ impl BotClient {
     fn new(client: fantoccini::Client,
            gmail_client: GmailClient,
            username: String,
-           payment_info: PaymentInfo,
-           shipping_address: Address,
+           payment: PaymentInfo,
+           shipping: Address,
            dry_run: bool) -> Self {
         Self {
             client,
             gmail_client: Arc::new(gmail_client),
             username,
-            payment_info,
-            shipping_address,
+            payment,
+            shipping,
             dry_run,
             state: BotClientState::Started,
         }
@@ -297,12 +297,12 @@ impl BotClient {
             let mut zip_input = self.find_element(Self::SHIPPING_ADDRESS_ZIP_SEL).await?;
             let save_input = self.find_element(Self::SHIPPING_ADDRESS_SAVE_SEL).await?;
 
-            first_name_input.send_keys(&self.shipping_address.first_name).await?;
-            last_name_input.send_keys(&self.shipping_address.last_name).await?;
-            address_input.send_keys(&self.shipping_address.street).await?;
-            city_input.send_keys(&self.shipping_address.city).await?;
-            state_input.select_by_value(&self.shipping_address.state).await?;
-            zip_input.send_keys(&self.shipping_address.zip_code).await?;
+            first_name_input.send_keys(&self.shipping.first_name).await?;
+            last_name_input.send_keys(&self.shipping.last_name).await?;
+            address_input.send_keys(&self.shipping.street).await?;
+            city_input.send_keys(&self.shipping.city).await?;
+            state_input.select_by_value(&self.shipping.state).await?;
+            zip_input.send_keys(&self.shipping.zip_code).await?;
             save_input.click().await?;
         }
 
@@ -325,7 +325,7 @@ impl BotClient {
 
         // Input the CC number first to get other elements to appear
         let mut cc_input = self.find_element(Self::PAYMENT_CC_INPUT_SEL).await?;
-        cc_input.send_keys(&self.payment_info.card_number).await?;
+        cc_input.send_keys(&self.payment.card_number).await?;
         sleep(Duration::from_millis(100)).await;
 
         // Input remaining CC info
@@ -334,9 +334,9 @@ impl BotClient {
         let mut cvv_input = self.find_element(Self::PAYMENT_CVV_SEL).await?;
         let save_card_input = self.find_element(Self::PAYMENT_SAVE_CARD_SEL).await?;
 
-        exp_month_input.select_by_value(&self.payment_info.exp_month).await?;
-        exp_year_input.select_by_value(&self.payment_info.exp_year).await?;
-        cvv_input.send_keys(&self.payment_info.cvv.to_string()).await?;
+        exp_month_input.select_by_value(&self.payment.exp_month).await?;
+        exp_year_input.select_by_value(&self.payment.exp_year).await?;
+        cvv_input.send_keys(&self.payment.cvv.to_string()).await?;
         save_card_input.click().await?;
 
         // Input billing address
@@ -347,12 +347,12 @@ impl BotClient {
         let state_input = self.find_element(Self::PAYMENT_ADDRESS_STATE_SEL).await?;
         let mut zip_input = self.find_element(Self::PAYMENT_ADDRESS_ZIP_SEL).await?;
 
-        first_name_input.send_keys(&self.payment_info.billing_address.first_name).await?;
-        last_name_input.send_keys(&self.payment_info.billing_address.last_name).await?;
-        address_input.send_keys(&self.payment_info.billing_address.street).await?;
-        city_input.send_keys(&self.payment_info.billing_address.city).await?;
-        state_input.select_by_value(&self.payment_info.billing_address.state).await?;
-        zip_input.send_keys(&self.payment_info.billing_address.zip_code).await?;
+        first_name_input.send_keys(&self.payment.billing.first_name).await?;
+        last_name_input.send_keys(&self.payment.billing.last_name).await?;
+        address_input.send_keys(&self.payment.billing.street).await?;
+        city_input.send_keys(&self.payment.billing.city).await?;
+        state_input.select_by_value(&self.payment.billing.state).await?;
+        zip_input.send_keys(&self.payment.billing.zip_code).await?;
 
         // Place the order!
         if !self.dry_run {
@@ -435,21 +435,21 @@ pub struct BestBuyBot {
     hostname: String,
     working_dir: String,
     product_urls: VecDeque<String>,
-    payment_info: PaymentInfo,
-    shipping_address: Address,
+    payment: PaymentInfo,
+    shipping: Address,
 }
 
 impl BestBuyBot {
     pub fn new(config: Config) -> Self {
-        let login_info = config.login_info.unwrap();
-        let username = login_info.username;
-        let password = login_info.password;
+        let login = config.login.unwrap();
+        let username = login.username;
+        let password = login.password;
         let hostname = config.hostname.unwrap_or_else(|| "http://localhost:4444".to_string());
         let interval = Duration::from_secs(config.interval.unwrap_or(20));
         let product_urls = VecDeque::from_iter(config.products.into_iter());
         let working_dir = config.working_dir.unwrap_or_else(|| String::new());
-        let payment_info = config.payment_info;
-        let shipping_address = config.shipping_address.unwrap();
+        let payment = config.payment;
+        let shipping = config.shipping.unwrap();
 
         Self {
             interval,
@@ -458,8 +458,8 @@ impl BestBuyBot {
             hostname,
             working_dir,
             product_urls,
-            payment_info,
-            shipping_address,
+            payment,
+            shipping,
         }
     }
 
@@ -490,8 +490,8 @@ impl BestBuyBot {
             client,
             gmail_client,
             self.username.clone(),
-            self.payment_info.clone(),
-            self.shipping_address.clone(),
+            self.payment.clone(),
+            self.shipping.clone(),
             dry_run,
         );
 
