@@ -1,7 +1,5 @@
 use std::collections::VecDeque;
 use std::iter::FromIterator;
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -10,7 +8,7 @@ use regex::Regex;
 use rusty_money::{Money, iso};
 use tokio::time::sleep;
 
-use crate::common::BotClientState;
+use crate::{common::BotClientState, twilio::TwilioClient};
 use crate::config::{Address, Config, PaymentInfo};
 use crate::gmail::GmailClient;
 
@@ -19,17 +17,17 @@ static SIGN_IN_URL: &str = "https://www.bestbuy.com/identity/global/signin";
 static EMAIL_CODE_PAT: &str = r#"<span.+>(\d+)</span>"#;
 
 #[derive(Clone)]
-struct WebdriverBot {
+struct WebdriverBot<'c, 'g> {
     client: fantoccini::Client,
-    gmail_client: Arc<GmailClient>,
-    username: String,
-    payment: PaymentInfo,
-    shipping: Address,
+    gmail_client: &'g GmailClient,
+    username: &'c str,
+    payment: &'c PaymentInfo,
+    shipping: &'c Address,
     dry_run: bool,
     state: BotClientState,
 }
 
-impl WebdriverBot {
+impl<'c, 'g> WebdriverBot<'c, 'g> {
     const USERNAME_SEL: &'static str = r#"#fld-e"#;
     const PASSWORD_SEL: &'static str = r#"#fld-p1"#;
     const SUBMIT_SEL: &'static str = r#"div.cia-form__controls > button"#;
@@ -67,14 +65,14 @@ impl WebdriverBot {
     const PAYMENT_PLACE_ORDER_SEL: &'static str = r#"div.button--place-order > button"#;
 
     fn new(client: fantoccini::Client,
-           gmail_client: GmailClient,
-           username: String,
-           payment: PaymentInfo,
-           shipping: Address,
+           gmail_client: &'g GmailClient,
+           username: &'c str,
+           payment: &'c PaymentInfo,
+           shipping: &'c Address,
            dry_run: bool) -> Self {
         Self {
             client,
-            gmail_client: Arc::new(gmail_client),
+            gmail_client,
             username,
             payment,
             shipping,
@@ -429,48 +427,56 @@ impl WebdriverBot {
 ///
 /// Each bot checks the given list of products on every tick and adds
 /// all available to the cart before checking out.
-pub struct BestBuyBot {
-    interval: Duration,
-    username: String,
-    password: String,
-    hostname: String,
-    working_dir: String,
+pub struct BestBuyBot<'c, 'g, 't> {
     product_urls: VecDeque<String>,
-    payment: PaymentInfo,
-    shipping: Address,
+    gmail_client: &'g GmailClient,
+    twilio_client: Option<&'t TwilioClient>,
+    config: &'c Config,
 }
 
-impl BestBuyBot {
-    pub fn new(config: Config) -> Self {
-        let login = config.login.unwrap();
-        let username = login.username;
-        let password = login.password;
-        let hostname = config.hostname.unwrap_or_else(|| "http://localhost:4444".to_string());
-        let interval = Duration::from_secs(config.interval.unwrap_or(20));
-        let product_urls = VecDeque::from_iter(config.products.into_iter());
-        let working_dir = config.working_dir.unwrap_or_else(|| String::new());
-        let payment = config.payment;
-        let shipping = config.shipping.unwrap();
+impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
+    pub fn new(config: &'c Config,
+               gmail_client: &'g GmailClient,
+               twilio_client: Option<&'t TwilioClient>) -> Self {
+        let product_urls = VecDeque::from_iter(config.general.products.to_owned().into_iter());
 
         Self {
-            interval,
-            username,
-            password,
-            hostname,
-            working_dir,
+            config,
             product_urls,
-            payment,
-            shipping,
+            gmail_client,
+            twilio_client,
         }
     }
 
+    /// Try to send a notification SMS when an item is purchased.
+    async fn send_message(&self, product_url: &str) -> Result<()> {
+        if self.twilio_client.is_none() {
+            return Ok(());
+        }
+
+        let twilio_client = self.twilio_client.unwrap();
+        let twilio_config = self.config.twilio.as_ref().unwrap();
+
+        let message = format!("Purchased {}", product_url);
+
+        twilio_client.send_message(
+            &twilio_config.from_number,
+            &twilio_config.to_number,
+            &message
+        ).await?;
+
+        log::info!("Sent notification SMS successfully");
+
+        Ok(())
+    }
+
     pub async fn start(&mut self, dry_run: bool, headless: bool) -> Result<()> {
-        // Setup the Gmail API client
-        let app_secret_name = "gmail-api-secret.json";
-        let token_persist_name = format!("{}-token.json", self.username);
-        let app_secret_path = PathBuf::new().join(&self.working_dir).join(app_secret_name);
-        let token_persist_path = PathBuf::new().join(&self.working_dir).join(token_persist_name);
-        let gmail_client = GmailClient::new(&app_secret_path, &token_persist_path).await?;
+        let username = self.config.login.as_ref().unwrap().username.as_str();
+        let password = self.config.login.as_ref().unwrap().password.as_str();
+        let hostname = self.config.general.hostname.as_deref().unwrap_or("http://localhost:4444");
+        let payment = &self.config.payment;
+        let shipping = self.config.shipping.as_ref().unwrap();
+        let interval = Duration::from_secs(self.config.general.interval.unwrap_or(20));
 
         // Setup the Webdriver client
         let mut client = fantoccini::ClientBuilder::native();
@@ -482,38 +488,40 @@ impl BestBuyBot {
             client.capabilities(caps);
         }
 
-        let client = client.connect(&self.hostname).await?;
+        let client = client.connect(hostname).await?;
 
         log::debug!("Connected to Webdriver");
 
         // Create a Webdriver bot for BestBuy
         let mut client = WebdriverBot::new(
             client,
-            gmail_client,
-            self.username.clone(),
-            self.payment.clone(),
-            self.shipping.clone(),
+            self.gmail_client,
+            username,
+            payment,
+            shipping,
             dry_run,
         );
 
         while self.product_urls.len() > 0 {
             let num_urls = self.product_urls.len();
 
-            // Check each of the products in the list.
+            // Check each of the products in the queue.
             //
             // If a product is out of stock, it is put back on the queue.
             for _ in 0..num_urls {
                 if let Some(product_url) = self.product_urls.pop_front() {
-                    match client.run(&product_url, &self.username, &self.password, true).await? {
-                        BotClientState::Purchased => (),
+                    match client.run(&product_url, username, password, true).await? {
+                        BotClientState::Purchased => {
+                            self.send_message(&product_url).await?;
+                        }
                         _ => self.product_urls.push_back(product_url),
                     };
                 }
             }
 
-            log::debug!("Sleeping for {:?}", self.interval);
+            log::debug!("Sleeping for {:?}", interval);
 
-            sleep(self.interval).await;
+            sleep(interval).await;
         }
 
         Ok(())

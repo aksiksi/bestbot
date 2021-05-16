@@ -6,6 +6,8 @@ use hyper::Client;
 use hyper_rustls::HttpsConnector;
 use yup_oauth2::InstalledFlowAuthenticator;
 
+use crate::config;
+
 pub struct GmailClient {
     client: google_gmail1::Gmail,
 }
@@ -28,6 +30,23 @@ impl GmailClient {
         Ok(Self {
             client,
         })
+    }
+
+    /// Constructs a GmailClient from a Config.
+    pub async fn from_config(config: &config::Config) -> Result<Self> {
+        let default_working_dir = "".to_string();
+        let working_dir = config.general.working_dir.as_ref().unwrap_or(&default_working_dir);
+        let username = &config.login.as_ref().unwrap().username;
+
+        let app_secret_name = "gmail-api-secret.json";
+        let token_persist_name = format!("{}-token.json", username);
+
+        let app_secret_path = PathBuf::new().join(working_dir).join(app_secret_name);
+        let token_persist_path = PathBuf::new().join(working_dir).join(token_persist_name);
+
+        let gmail_client = GmailClient::new(&app_secret_path, &token_persist_path).await?;
+
+        Ok(gmail_client)
     }
 
     /// List the first `limit` messages that match the given query.

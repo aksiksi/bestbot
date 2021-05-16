@@ -9,11 +9,20 @@ pub struct Login {
     pub password: String,
 }
 
+#[derive(Deserialize)]
+pub struct Twilio {
+    pub sid: String,
+    pub auth_token: String,
+    pub from_number: String,
+    pub to_number: String,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Address {
     pub first_name: String,
     pub last_name: String,
     pub street: String,
+    pub street_2: Option<String>,
     pub city: String,
     pub state: String,
     pub zip_code: String,
@@ -29,12 +38,18 @@ pub struct PaymentInfo {
 }
 
 #[derive(Deserialize)]
-pub struct Config {
+pub struct General {
+    pub products: Vec<String>,
     pub interval: Option<u64>,
     pub hostname: Option<String>,
     pub working_dir: Option<String>,
-    pub products: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct Config {
+    pub general: General,
     pub login: Option<Login>,
+    pub twilio: Option<Twilio>,
     pub payment: PaymentInfo,
     pub shipping: Option<Address>,
 }
@@ -44,7 +59,7 @@ impl Config {
         let config_file = std::fs::read_to_string(path)?;
         let mut parsed: Config = toml::from_str(&config_file)?;
 
-        assert!(parsed.products.len() > 0, "No products specified!");
+        assert!(parsed.general.products.len() > 0, "No products specified!");
 
         if parsed.login.is_none() {
             let username = match std::env::var("BESTBOT_USERNAME") {
