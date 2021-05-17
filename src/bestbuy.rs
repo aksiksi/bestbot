@@ -473,34 +473,13 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
     pub async fn start(&mut self, dry_run: bool, headless: bool) -> Result<()> {
         let username = self.config.login.as_ref().unwrap().username.as_str();
         let password = self.config.login.as_ref().unwrap().password.as_str();
-        let hostname = self.config.general.hostname.as_deref().unwrap_or("http://localhost:4444");
+        let hostname = self.config.general.hostname.as_deref();
         let payment = &self.config.payment;
         let shipping = self.config.shipping.as_ref().unwrap();
         let interval = Duration::from_secs(self.config.general.interval.unwrap_or(20));
 
-        // Setup the Webdriver client
-        let mut client = fantoccini::ClientBuilder::native();
-
-        if headless {
-            let mut caps = serde_json::map::Map::new();
-            let args = serde_json::json!({
-                "args": [
-                    "--no-sandbox",
-                    "--headless",
-                    "--disable-gpu",
-                    "--no-proxy-server",
-                    "--proxy-server='direct://'",
-                    "--proxy-bypass-list=*",
-                    "--window-size=1920,1200",
-                ]
-            });
-            caps.insert("goog:chromeOptions".to_string(), args);
-            client.capabilities(caps);
-        }
-
-        let client = client.connect(hostname).await?;
-
-        log::debug!("Connected to Webdriver");
+        // Connect to Webdriver client
+        let client = crate::common::new_webdriver_client(headless, hostname).await?;
 
         // Create a Webdriver bot for BestBuy
         let mut client = WebdriverBot::new(
