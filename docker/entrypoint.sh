@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Start Chromdriver
-chromedriver --port=4444 &
+# Start geckodriver
+geckodriver &
 
 # Start the bot
 bestbot --headless /config/config.toml
