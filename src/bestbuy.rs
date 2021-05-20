@@ -37,7 +37,6 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
     const ADD_TO_CART_BTN_SEL: &'static str = r#"div.fulfillment-add-to-cart-button button"#;
     const REMOVE_CART_LINK_SEL: &'static str = r#"a.cart-item__remove"#;
     const CART_CHECKOUT_BTN_SEL: &'static str = r#"div.checkout-buttons__checkout > button"#;
-    const SHOPPING_CART_COUNT_SEL: &'static str = r#"div.shop-cart-icon div.dot"#;
     const VERIFICATION_CODE_SEL: &'static str = r#"input#verificationCode"#;
     const VERIFICATION_CODE_FORM: &'static str = r#"form.cia-form"#;
     const CHECKOUT_PAGE_READY_SEL: &'static str = r#"h1.fulfillment__page-title"#;
@@ -48,7 +47,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
     const SHIPPING_ADDRESS_LAST_NAME_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.lastName']"#;
     const SHIPPING_ADDRESS_STREET_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.street']"#;
     const SHIPPING_ADDRESS_CITY_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.city']"#;
-    const SHIPPING_ADDRESS_STATE_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.state']"#;
+    const SHIPPING_ADDRESS_STATE_SEL: &'static str = r#"select[id='consolidatedAddresses.ui_address_2.state']"#;
     const SHIPPING_ADDRESS_ZIP_SEL: &'static str = r#"input[id='consolidatedAddresses.ui_address_2.zipcode']"#;
     const SHIPPING_ADDRESS_SAVE_SEL: &'static str = r#"input[id='save-for-billing-address-ui_address_2']"#;
     const PAYMENT_CC_INPUT_SEL: &'static str = r#"input#optimized-cc-card-number"#;
@@ -105,11 +104,6 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 
     /// Clear everything in the cart
     async fn clear_cart(&mut self) -> Result<()> {
-        // Check if there are any items in the cart
-        if !self.is_element_present(Self::SHOPPING_CART_COUNT_SEL).await? {
-            return Ok(());
-        }
-
         self.open_cart().await?;
 
         log::debug!("Clearing cart...");
@@ -119,8 +113,8 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
             self.client.find_all(Locator::Css(Self::REMOVE_CART_LINK_SEL)).await?;
 
         for btn in remove_btns.into_iter() {
-            btn.click().await?;
             sleep(Duration::from_millis(1000)).await;
+            btn.click().await?;
         }
 
         log::debug!("Cart cleared");
@@ -284,7 +278,9 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
                 new_address_btn.click().await?;
             }
 
+            // Wait for the address inputs to appear
             self.client.wait_for_find(Locator::Css(Self::SHIPPING_ADDRESS_FIRST_NAME_SEL)).await?;
+            self.client.wait_for_find(Locator::Css(Self::SHIPPING_ADDRESS_SAVE_SEL)).await?;
 
             let mut first_name_input = self.find_element(Self::SHIPPING_ADDRESS_FIRST_NAME_SEL).await?;
             let mut last_name_input = self.find_element(Self::SHIPPING_ADDRESS_LAST_NAME_SEL).await?;
@@ -374,10 +370,16 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
         self.client.wait_for_find(Locator::Css(Self::CART_CHECKOUT_BTN_SEL)).await?;
 
         let checkout_btn_locator = Locator::Css(Self::CART_CHECKOUT_BTN_SEL);
-        let checkout_btn = self.client.find(checkout_btn_locator).await?;
 
         // Start the checkout
-        checkout_btn.click().await?;
+        // Note that we may need to try this a few times
+        loop {
+            let checkout_btn = self.client.find(checkout_btn_locator).await?;
+            if let Ok(_) = checkout_btn.click().await {
+                break;
+            }
+        }
+
         self.client.wait_for_navigation(None).await?;
 
         self.fulfillment().await?;
@@ -449,7 +451,7 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
     }
 
     /// Try to send a notification SMS when an item is purchased.
-    async fn send_message(&self, product_url: &str) -> Result<()> {
+    async fn send_message(&self, message: &str) -> Result<()> {
         if self.twilio_client.is_none() {
             return Ok(());
         }
@@ -457,12 +459,10 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
         let twilio_client = self.twilio_client.unwrap();
         let twilio_config = self.config.twilio.as_ref().unwrap();
 
-        let message = format!("Purchased {}", product_url);
-
         twilio_client.send_message(
             &twilio_config.from_number,
             &twilio_config.to_number,
-            &message
+            message
         ).await?;
 
         log::info!("Sent notification SMS successfully");
@@ -501,7 +501,8 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
                 if let Some(product_url) = self.product_urls.pop_front() {
                     match client.run(&product_url, username, password, true).await? {
                         BotClientState::Purchased => {
-                            self.send_message(&product_url).await?;
+                            let message = format!("Purchased: {}", product_url);
+                            self.send_message(&message).await?;
                         }
                         _ => self.product_urls.push_back(product_url),
                     };

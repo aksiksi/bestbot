@@ -46,9 +46,9 @@ pub async fn new_webdriver_client(headless: bool, hostname: Option<&str>) -> Res
         client.capabilities(caps);
     }
 
-    let client = client.connect(hostname).await?;
+    let mut client = client.connect(hostname).await?;
 
-    log::debug!("Connected to Webdriver");
+    log::debug!("Connected to WebDriver - session ID: {}", client.session_id().await?.unwrap());
 
     Ok(client)
 }
