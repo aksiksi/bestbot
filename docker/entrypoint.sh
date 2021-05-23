@@ -4,5 +4,5 @@
 geckodriver &
 
 # Start the bot
-bestbot --headless /config/config.toml
+RUST_LOG=debug bestbot --headless /config/config.toml
 

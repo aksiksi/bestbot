@@ -9,8 +9,14 @@ COPY . .
 # Install dependencies
 RUN apt-get update && \
     apt-get install -y git wget curl unzip && \
-    apt-get install -y firefox-esr && \
+    DEBIAN_FRONTEND="noninteractive" apt-get install -y libgtk-3-0 xorg libstdc++6 libc6 libdbus-glib-1-2 && \
     rm -rf /var/lib/apt/lists/*
+
+# Download Firefox
+RUN wget https://ftp.mozilla.org/pub/firefox/releases/89.0b9/linux-x86_64/en-US/firefox-89.0b9.tar.bz2 && \
+    tar xvf firefox-89.0b9.tar.bz2 && \
+    mv firefox /usr/lib/firefox && \
+    ln -s /usr/lib/firefox/firefox /usr/bin/firefox
 
 # Download geckodriver
 RUN wget https://github.com/mozilla/geckodriver/releases/download/v0.29.1/geckodriver-v0.29.1-linux64.tar.gz
