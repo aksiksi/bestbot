@@ -1,11 +1,14 @@
 use std::collections::VecDeque;
 use std::iter::FromIterator;
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::Result;
 use fantoccini::{cookies::Cookie, Locator, elements::Element};
 use regex::Regex;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rusty_money::{Money, iso};
+use serde_json::Value as Json;
 use tokio::time::sleep;
 
 use crate::{common::BotClientState, twilio::TwilioClient};
@@ -25,21 +28,40 @@ impl BestBuyApi {
     const BASE_URL: &'static str = "https://www.bestbuy.com";
     const USER_AGENT: &'static str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0";
 
-    /// Build an API client using a list of cookies.
+    fn is_auth_cookie(name: &str) -> bool {
+        let name = name.to_lowercase();
+        match name.as_str() {
+            "ut" | "bm_sz" => true,
+            _ => false,
+        }
+    }
+
+    /// Build an API client from a list of cookies.
     fn from_cookies(cookies: &[Cookie]) -> Result<Self> {
         // Build a cookie jar for use with the HTTP client
         let cookie_jar = reqwest::cookie::Jar::default();
         let url: reqwest::Url = Self::BASE_URL.parse().unwrap();
         for cookie in cookies {
-            let encoded = cookie.encoded().to_string();
-            cookie_jar.add_cookie_str(&encoded, &url);
+            if Self::is_auth_cookie(cookie.name()) {
+                let encoded = cookie.encoded().to_string();
+                cookie_jar.add_cookie_str(&encoded, &url);
+            }
         }
+
+        let default_headers: HeaderMap =
+            [("Origin", Self::BASE_URL), ("Referer", Self::BASE_URL)]
+            .iter()
+            .map(|(name, value)| {
+                (HeaderName::from_str(name).unwrap(), HeaderValue::from_str(value).unwrap())
+            })
+            .collect();
 
         // The BestBuy API only accepts HTTP/2 requests and relies on ALPN to handle
         // negotiating the protocol. As a result, we need to use the `rustls-tls`
         // backend for `reqwest` and explicitly enable it when building the client.
         let client = reqwest::Client::builder()
             .user_agent(Self::USER_AGENT)
+            .default_headers(default_headers)
             .timeout(std::time::Duration::from_secs(10))
             .cookie_provider(std::sync::Arc::new(cookie_jar))
             .https_only(true)
@@ -52,9 +74,9 @@ impl BestBuyApi {
     }
 
     /// Add a single item to the cart
-    async fn add_to_cart(&self, sku: &str) -> Result<serde_json::Value> {
-        let endpoint = format!("{}{}", Self::BASE_URL, "/cart/api/v1/addToCart");
-        let json: serde_json::Value = serde_json::json!(
+    async fn add_to_cart(&self, sku: &str) -> Result<Json> {
+        let endpoint = format!("{}/cart/api/v1/addToCart", Self::BASE_URL);
+        let json = serde_json::json!(
             {
                 "items": [
                     {"skuId": sku},
@@ -62,9 +84,37 @@ impl BestBuyApi {
             }
         );
 
-        let resp: serde_json::Value = self.client
+        let resp: Json = self.client
             .post(&endpoint)
             .json(&json)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        log::debug!("{:?}", resp);
+
+        Ok(resp)
+    }
+
+    #[allow(dead_code)]
+    async fn remove_cart_item(&self, item_id: &str) -> Result<()> {
+        let endpoint = format!("{}/cart/item/{}", Self::BASE_URL, item_id);
+        self.client
+            .delete(&endpoint)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(())
+    }
+
+    async fn get_cart(&self) -> Result<Json> {
+        let endpoint = format!("{}/cart/json", Self::BASE_URL);
+        let resp: Json = self.client
+            .get(&endpoint)
             .send()
             .await?
             .error_for_status()?
@@ -221,6 +271,9 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 
         log::info!("Signed in successfully");
 
+        // Clear the cart after signing in
+        self.clear_cart().await?;
+
         // Get the authentication cookies
         // TODO: Need to determine how to get valid value of _abck
         let cookies = self.client.get_all_cookies().await?;
@@ -275,6 +328,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
             log::info!("Adding to cart...");
         }
 
+        self.api_client().get_cart().await?;
         self.api_client().add_to_cart(&sku).await?;
 
         Ok(BotClientState::CartUpdated)
@@ -461,12 +515,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 
             // Figure out what to do next based on current state
             match self.state {
-                BotClientState::Started => {
-                    self.state = self.sign_in(username, password).await?;
-
-                    // Clear the cart after signing in
-                    self.clear_cart().await?;
-                }
+                BotClientState::Started => self.state = self.sign_in(username, password).await?,
                 BotClientState::SignedIn => self.state = self.check_product(product_url).await?,
                 BotClientState::CartUpdated => {
                     if checkout {
