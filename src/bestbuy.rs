@@ -3,7 +3,7 @@ use std::iter::FromIterator;
 use std::time::Duration;
 
 use anyhow::Result;
-use fantoccini::{Locator, elements::Element};
+use fantoccini::{cookies::Cookie, Locator, elements::Element};
 use regex::Regex;
 use rusty_money::{Money, iso};
 use tokio::time::sleep;
@@ -16,10 +16,72 @@ static CART_URL: &str = "https://www.bestbuy.com/cart";
 static SIGN_IN_URL: &str = "https://www.bestbuy.com/identity/global/signin";
 static EMAIL_CODE_PAT: &str = r#"<span.+>(\d+)</span>"#;
 
+#[derive(Clone, Debug)]
+struct BestBuyApi {
+    client: reqwest::Client,
+}
+
+impl BestBuyApi {
+    const BASE_URL: &'static str = "https://www.bestbuy.com";
+    const USER_AGENT: &'static str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0";
+
+    /// Build an API client using a list of cookies.
+    fn from_cookies(cookies: &[Cookie]) -> Result<Self> {
+        // Build a cookie jar for use with the HTTP client
+        let cookie_jar = reqwest::cookie::Jar::default();
+        let url: reqwest::Url = Self::BASE_URL.parse().unwrap();
+        for cookie in cookies {
+            let encoded = cookie.encoded().to_string();
+            cookie_jar.add_cookie_str(&encoded, &url);
+        }
+
+        // The BestBuy API only accepts HTTP/2 requests and relies on ALPN to handle
+        // negotiating the protocol. As a result, we need to use the `rustls-tls`
+        // backend for `reqwest` and explicitly enable it when building the client.
+        let client = reqwest::Client::builder()
+            .user_agent(Self::USER_AGENT)
+            .timeout(std::time::Duration::from_secs(10))
+            .cookie_provider(std::sync::Arc::new(cookie_jar))
+            .https_only(true)
+            .use_rustls_tls() // Needed for ALPN (HTTP -> HTTP2 upgrade)
+            .build()?;
+
+        Ok(Self {
+            client
+        })
+    }
+
+    /// Add a single item to the cart
+    async fn add_to_cart(&self, sku: &str) -> Result<serde_json::Value> {
+        let endpoint = format!("{}{}", Self::BASE_URL, "/cart/api/v1/addToCart");
+        let json: serde_json::Value = serde_json::json!(
+            {
+                "items": [
+                    {"skuId": sku},
+                ]
+            }
+        );
+
+        let resp: serde_json::Value = self.client
+            .post(&endpoint)
+            .json(&json)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        log::debug!("{:?}", resp);
+
+        Ok(resp)
+    }
+}
+
 #[derive(Clone)]
 struct WebdriverBot<'c, 'g> {
     client: fantoccini::Client,
     gmail_client: &'g GmailClient,
+    api_client: Option<BestBuyApi>,
     username: &'c str,
     payment: &'c PaymentInfo,
     shipping: &'c Address,
@@ -33,6 +95,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
     const SUBMIT_SEL: &'static str = r#"div.cia-form__controls > button"#;
     const PRODUCT_PRICE_SEL: &'static str = r#"div.priceView-customer-price > span"#;
     const PRODUCT_TITLE_SEL: &'static str = r#"div.sku-title"#;
+    const PRODUCT_SKU_SEL: &'static str = r#"div.sku span.product-data-value"#;
     const CART_READY_TEXT_SEL: &'static str = r#"h2.order-summary__heading"#;
     const ADD_TO_CART_BTN_SEL: &'static str = r#"div.fulfillment-add-to-cart-button button"#;
     const REMOVE_CART_LINK_SEL: &'static str = r#"a.cart-item__remove"#;
@@ -72,12 +135,17 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
         Self {
             client,
             gmail_client,
+            api_client: None,
             username,
             payment,
             shipping,
             dry_run,
             state: BotClientState::Started,
         }
+    }
+
+    fn api_client(&self) -> &BestBuyApi {
+        self.api_client.as_ref().unwrap()
     }
 
     async fn find_element(&mut self, selector: &str) -> Result<Element> {
@@ -153,20 +221,14 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 
         log::info!("Signed in successfully");
 
+        // Get the authentication cookies
+        // TODO: Need to determine how to get valid value of _abck
+        let cookies = self.client.get_all_cookies().await?;
+
+        // Build a new API client using the cookies
+        self.api_client = Some(BestBuyApi::from_cookies(&cookies)?);
+
         Ok(BotClientState::SignedIn)
-    }
-
-    /// Figure out if we have a modal. If we do, close it.
-    async fn close_modal(&mut self) -> Result<()> {
-        if self.is_element_present(".close-modal-x").await? {
-            let btn = self.client
-                .find(Locator::Css(".close-modal-x"))
-                .await?;
-            btn.click().await?;
-            log::debug!("Closed modal");
-        }
-
-        Ok(())
     }
 
     /// Check if a product is in stock. If yes, add it to the cart.
@@ -192,7 +254,13 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
             .await?
             .unwrap_or_else(|| "Unknown".to_string());
 
-        log::info!("Product: {}, Price: {}", product_title, price);
+        let mut sku_label_elem = self.find_element(Self::PRODUCT_SKU_SEL).await?;
+        let sku = sku_label_elem
+            .prop("innerText")
+            .await?
+            .expect("Could not extract SKU ID");
+
+        log::info!("Product: {}, SKU: {}, Price: {}", product_title, sku, price);
 
         let mut add_to_cart_btn = self.client
             .find(Locator::Css(Self::ADD_TO_CART_BTN_SEL))
@@ -207,12 +275,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
             log::info!("Adding to cart...");
         }
 
-        // Add this product to the cart
-        add_to_cart_btn.click().await?;
-
-        // Wait for cart modal to pop up and close it
-        sleep(Duration::from_millis(1000)).await;
-        self.close_modal().await?;
+        self.api_client().add_to_cart(&sku).await?;
 
         Ok(BotClientState::CartUpdated)
     }

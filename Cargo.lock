@@ -257,8 +257,7 @@ dependencies = [
 [[package]]
 name = "fantoccini"
 version = "0.17.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e49ba709e57aca51a97b5f6a81e5be479dff7739422f10f7292d3aaaa5d2a7a9"
+source = "git+https://github.com/aksiksi/fantoccini?rev=9454875108a29975811d05f3033b21d4af29592f#9454875108a29975811d05f3033b21d4af29592f"
 dependencies = [
  "base64 0.13.0",
  "cookie 0.14.4",
@@ -270,6 +269,7 @@ dependencies = [
  "mime 0.3.16",
  "serde",
  "serde_json",
+ "time 0.2.26",
  "tokio",
  "url 2.2.2",
  "webdriver",
@@ -1012,6 +1012,7 @@ dependencies = [
  "http",
  "http-body",
  "hyper",
+ "hyper-rustls",
  "hyper-tls",
  "ipnet",
  "js-sys",
@@ -1021,12 +1022,15 @@ dependencies = [
  "native-tls",
  "percent-encoding 2.1.0",
  "pin-project-lite",
+ "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "time 0.2.26",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls",
  "url 2.2.2",
  "wasm-bindgen",
  "wasm-bindgen-futures",

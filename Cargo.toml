@@ -5,7 +5,8 @@ authors = ["Assil Ksiksi <cyph0nik@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-fantoccini = "0.17.3"
+# Private fork with cookie support
+fantoccini = { git = "https://github.com/aksiksi/fantoccini", rev = "9454875108a29975811d05f3033b21d4af29592f" }
 tokio = { version = "1", features = ["default", "macros", "rt-multi-thread"] }
 structopt = "0.3"
 anyhow = "1"
@@ -21,4 +22,4 @@ regex = "1"
 toml = "0.5"
 log = "0.4.14"
 env_logger = "0.8.3"
-reqwest = { version = "0.11", features = ["cookies", "json"] }
+reqwest = { version = "0.11", features = ["cookies", "json", "rustls-tls-native-roots"] }
