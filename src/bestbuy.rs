@@ -12,8 +12,8 @@ use serde::Deserialize;
 use serde_json::Value as Json;
 use tokio::time::sleep;
 
-use crate::{common::BotClientState, twilio::TwilioClient};
-use crate::config::{Address, Config, PaymentInfo};
+use crate::{common::BotClientState, discord::DiscordWebhook, twilio::TwilioClient};
+use crate::config::Config;
 use crate::gmail::GmailClient;
 
 static SIGN_IN_URL: &str = "https://www.bestbuy.com/identity/global/signin";
@@ -105,10 +105,19 @@ struct Cart {
 
 #[derive(Debug, Deserialize)]
 struct ItemPriceInfo {
-    skuId: String,
     regularPrice: f64,
     currentPrice: f64,
     customerPrice: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ItemInfo {
+    sku: String,
+    name: String,
+    url: String,
+    price: ItemPriceInfo,
+    image_url: String,
+    description: String,
 }
 
 #[derive(Clone, Debug)]
@@ -123,8 +132,8 @@ impl BestBuyApi {
     fn is_auth_cookie(name: &str) -> bool {
         let name = name.to_lowercase();
         match name.as_str() {
-            // As far as I can tell, BestBuy uses these two auth cookies
-            "ut" | "bm_sz" => true,
+            // As far as I can tell, BestBuy uses these three auth cookies
+            "ut" | "bm_sz" | "at" => true,
             _ => false,
         }
     }
@@ -141,8 +150,13 @@ impl BestBuyApi {
             }
         }
 
+        // Default headers for every request
         let default_headers: HeaderMap =
-            [("Origin", Self::BASE_URL), ("Referer", Self::BASE_URL)]
+            [
+                ("Origin", Self::BASE_URL),
+                ("Referer", Self::BASE_URL),
+                ("Accept-Language", "en-US"),
+            ]
             .iter()
             .map(|(name, value)| {
                 (HeaderName::from_str(name).unwrap(), HeaderValue::from_str(value).unwrap())
@@ -188,6 +202,55 @@ impl BestBuyApi {
             .await?;
 
         Ok(info)
+    }
+
+    /// Get relevant info for a given item, including its price
+    async fn get_item_info(&self, sku: &str) -> Result<ItemInfo> {
+        let endpoint = format!("{}/api/tcfb/model.json", Self::BASE_URL);
+
+        let price = self.get_item_price(sku).await?;
+
+        // Query: item name, item URL, item image URL, and item description
+        let paths = format!(r#"[
+            ["shop", "magellan", "v2", "product", "skus", {sku}, "names", "short"],
+            ["shop", "magellan", "v1", "sites", "skuId", {sku}, "sites", "bbypres", "relativePdpUrl"],
+            ["shop", "magellan", "v2", "product", "skus", {sku}, "images", "0"],
+            ["shop", "magellan", "v2", "product", "skus", {sku}, "descriptions", "long"]
+        ]"#, sku=sku);
+
+        let json: Json = self.client
+            .get(endpoint)
+            .query(&[
+                ("method", "get"),
+                ("paths", &paths)
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let name =
+            json["jsonGraph"]["shop"]["magellan"]["v2"]["product"]["skus"][sku]["names"]["short"]["value"].as_str().unwrap().to_string();
+        let relative_url =
+            json["jsonGraph"]["shop"]["magellan"]["v1"]["sites"]["skuId"][sku]["sites"]["bbypres"]["relativePdpUrl"]["value"].as_str().unwrap();
+        let image_url =
+            json["jsonGraph"]["shop"]["magellan"]["v2"]["product"]["skus"][sku]["images"]["0"]["value"]["href"].as_str().unwrap().to_string();
+        let description =
+            json["jsonGraph"]["shop"]["magellan"]["v2"]["product"]["skus"][sku]["descriptions"]["long"]["value"].as_str().unwrap().to_string();
+
+        let url = format!("{}{}", Self::BASE_URL, relative_url);
+
+        let item_info = ItemInfo {
+            sku: sku.to_string(),
+            name,
+            url,
+            price,
+            image_url,
+            description,
+        };
+
+        Ok(item_info)
     }
 
     /// Checks if a product is in stock by fetching the "add to cart"
@@ -238,6 +301,7 @@ impl BestBuyApi {
     }
 
     /// Add a single item to the cart
+    #[allow(dead_code)]
     async fn add_to_cart(&self, sku: &str) -> Result<()> {
         let endpoint = format!("{}/cart/api/v1/addToCart", Self::BASE_URL);
         let json = serde_json::json!(
@@ -286,9 +350,31 @@ impl BestBuyApi {
             .delete(&endpoint)
             .send()
             .await?
-            .error_for_status()?
-            .text()
-            .await?;
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// Modify an existing cart item
+    #[allow(dead_code)]
+    async fn modify_cart_item(&self, item_id: &str, quantity: Option<u32>) -> Result<()> {
+        if quantity.is_none() {
+            return Ok(());
+        }
+
+        let endpoint = format!("{}/cart/item/{}", Self::BASE_URL, item_id);
+        let mut json = serde_json::json!({});
+
+        if let Some(quantity) = quantity {
+            json["quantity"] = serde_json::json!(quantity);
+        }
+
+        self.client
+            .put(&endpoint)
+            .json(&json)
+            .send()
+            .await?
+            .error_for_status()?;
+
         Ok(())
     }
 
@@ -413,8 +499,6 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
         username_input.send_keys(username).await?;
         password_input.send_keys(password).await?;
 
-        // TODO: remember me
-
         // Submit the login form and wait for the new page to load
         submit.click().await?;
         self.client.wait_for_navigation(None).await?;
@@ -438,16 +522,18 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 pub struct BestBuyBot<'c, 'g, 't> {
     skus: VecDeque<String>,
     gmail_client: &'g GmailClient,
-    twilio_client: Option<&'t TwilioClient>,
     api_client: Option<BestBuyApi>,
     config: &'c Config,
+    twilio_client: Option<&'t TwilioClient>,
+    discord_webhook: Option<&'t DiscordWebhook>,
     state: BotClientState,
 }
 
 impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
     pub fn new(config: &'c Config,
                gmail_client: &'g GmailClient,
-               twilio_client: Option<&'t TwilioClient>) -> Self {
+               twilio_client: Option<&'t TwilioClient>,
+               discord_webhook: Option<&'t DiscordWebhook>) -> Self {
         let skus = VecDeque::from_iter(config.general.products.to_owned().into_iter());
 
         Self {
@@ -456,6 +542,7 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
             gmail_client,
             api_client: None,
             twilio_client,
+            discord_webhook,
             state: BotClientState::Started,
         }
     }
@@ -464,52 +551,49 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
         self.api_client.as_ref().unwrap()
     }
 
-    /// Try to send a notification SMS when an item is purchased.
+    /// Try to send a notification when an item is purchased.
     async fn send_message(&self, message: &str) -> Result<()> {
         if self.twilio_client.is_none() {
             return Ok(());
         }
 
-        let twilio_client = self.twilio_client.unwrap();
-        let twilio_config = self.config.twilio.as_ref().unwrap();
+        if let Some(twilio_client) = &self.twilio_client {
+            let twilio_config = self.config.twilio.as_ref().unwrap();
 
-        twilio_client.send_message(
-            &twilio_config.from_number,
-            &twilio_config.to_number,
-            message
-        ).await?;
+            twilio_client.send_message(
+                &twilio_config.from_number,
+                &twilio_config.to_number,
+                message
+            ).await?;
 
-        log::info!("Sent notification SMS successfully");
+            log::info!("Sent notification SMS successfully");
+        }
+
+        if let Some(discord_webhook) = &self.discord_webhook {
+            discord_webhook.trigger(message).await?;
+            log::info!("Triggered Discord webhook successfully");
+        }
 
         Ok(())
     }
 
     /// Run the client to completion for a given product.
-    async fn run(&mut self, sku: &str, dry_run: bool) -> Result<BotClientState> {
+    async fn run(&mut self, sku: &str, _dry_run: bool) -> Result<BotClientState> {
         let api_client = self.api_client.as_ref().unwrap();
 
         let mut state: BotClientState = self.state;
-
-        let item_price = api_client.get_item_price(sku).await?;
-
-        log::info!("Item {} price: ${}", sku, item_price.currentPrice);
 
         loop {
             // Figure out what to do next based on current state
             match self.state {
                 BotClientState::SignedIn => {
                     state = if api_client.is_in_stock(sku).await? {
-                        api_client.add_to_cart(sku).await?;
-                        BotClientState::CartUpdated
+                        BotClientState::InStock
                     } else {
                         BotClientState::NotInStock
                     };
                 }
-                BotClientState::CartUpdated => {
-                    // TODO: Run checkout flow via API
-                    todo!()
-                }
-                BotClientState::NotInStock | BotClientState::Purchased => break,
+                BotClientState::NotInStock | BotClientState::InStock => break,
                 _ => unreachable!("Invalid state"),
             }
 
@@ -524,8 +608,6 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
 
     pub async fn start(&mut self, dry_run: bool, headless: bool) -> Result<()> {
         let hostname = self.config.general.hostname.as_deref();
-        let payment = &self.config.payment;
-        let shipping = self.config.shipping.as_ref().unwrap();
         let interval = Duration::from_secs(self.config.general.interval.unwrap_or(20));
 
         // Connect to the Webdriver client
@@ -558,9 +640,18 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
             // If a product is out of stock, it is put back on the queue.
             for _ in 0..num_products {
                 if let Some(sku) = self.skus.pop_front() {
+                    // Get item info
+                    let item_info = self.api_client().get_item_info(&sku).await?;
+                    let (name, price) = (&item_info.name, item_info.price.currentPrice);
+                    log::info!("Name: \"{}\", Price: ${}", name, price);
+
                     match self.run(&sku, dry_run).await? {
+                        BotClientState::InStock => {
+                            let message = format!("In Stock: {} for ${}", name, price);
+                            self.send_message(&message).await?;
+                        }
                         BotClientState::Purchased => {
-                            let message = format!("Purchased: {}", sku);
+                            let message = format!("Purchased: {} for ${}", name, price);
                             self.send_message(&message).await?;
                         }
                         _ => self.skus.push_back(sku),

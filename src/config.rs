@@ -17,6 +17,11 @@ pub struct Twilio {
     pub to_number: String,
 }
 
+#[derive(Deserialize)]
+pub struct Discord {
+    pub webhook_url: String,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Address {
     pub first_name: String,
@@ -50,6 +55,7 @@ pub struct Config {
     pub general: General,
     pub login: Option<Login>,
     pub twilio: Option<Twilio>,
+    pub discord: Option<Discord>,
     pub payment: PaymentInfo,
     pub shipping: Option<Address>,
 }

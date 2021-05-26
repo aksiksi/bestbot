@@ -33,10 +33,10 @@ impl TwilioClient {
     }
 
     pub async fn send_message(&self, from: &str, to: &str, body: &str) -> Result<()> {
-        let url = format!("{}/{}/Messages.json", Self::BASE_URL, self.sid);
+        let endpoint = format!("{}/{}/Messages.json", Self::BASE_URL, self.sid);
 
         self.client
-            .post(&url)
+            .post(&endpoint)
             .form(&[("Body", body), ("To", to), ("From", from)])
             .basic_auth(&self.sid, Some(&self.auth_token))
             .send()
@@ -51,6 +51,7 @@ impl TwilioClient {
 mod test {
     use super::*;
 
+    #[ignore]
     #[tokio::test]
     async fn test_twilio_client() {
         let sid = std::env::var("TWILIO_SID").unwrap();

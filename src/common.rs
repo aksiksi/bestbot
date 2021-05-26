@@ -1,11 +1,13 @@
 use anyhow::Result;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum BotClientState {
     Started,
     SignedIn,
-    CartUpdated,
     NotInStock,
+    InStock,
+    CartUpdated,
     Purchased,
 }
 

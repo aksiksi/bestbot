@@ -6,10 +6,12 @@ use structopt::StructOpt;
 mod bestbuy;
 mod common;
 mod config;
+mod discord;
 mod gmail;
 mod twilio;
 
 use bestbuy::BestBuyBot;
+use discord::DiscordWebhook;
 use gmail::GmailClient;
 use twilio::TwilioClient;
 
@@ -31,8 +33,9 @@ async fn main() -> Result<()> {
 
     let gmail_client = GmailClient::from_config(&config).await?;
     let twilio_client = TwilioClient::from_config(&config)?;
+    let discord_client = DiscordWebhook::from_config(&config);
 
-    let mut bot = BestBuyBot::new(&config, &gmail_client, twilio_client.as_ref());
+    let mut bot = BestBuyBot::new(&config, &gmail_client, twilio_client.as_ref(), discord_client.as_ref());
 
     bot.start(args.dry_run, args.headless).await?;
 
