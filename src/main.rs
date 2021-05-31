@@ -35,7 +35,12 @@ async fn main() -> Result<()> {
     let twilio_client = TwilioClient::from_config(&config)?;
     let discord_client = DiscordWebhook::from_config(&config);
 
-    let mut bot = BestBuyBot::new(&config, &gmail_client, twilio_client.as_ref(), discord_client.as_ref());
+    let mut bot = BestBuyBot::new(
+        &config,
+        gmail_client.as_ref(),
+        twilio_client.as_ref(),
+        discord_client.as_ref()
+    );
 
     bot.start(args.dry_run, args.headless).await?;
 

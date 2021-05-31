@@ -33,8 +33,13 @@ impl GmailClient {
     }
 
     /// Constructs a GmailClient from a Config.
-    pub async fn from_config(config: &config::Config) -> Result<Self> {
+    pub async fn from_config(config: &config::Config) -> Result<Option<Self>> {
         let default_working_dir = "".to_string();
+
+        if config.general.gmail_user.is_none() {
+            return Ok(None);
+        }
+
         let working_dir = config.general.working_dir.as_ref().unwrap_or(&default_working_dir);
         let username = &config.general.gmail_user.as_ref().unwrap();
 
@@ -46,7 +51,7 @@ impl GmailClient {
 
         let gmail_client = GmailClient::new(&app_secret_path, &token_persist_path).await?;
 
-        Ok(gmail_client)
+        Ok(Some(gmail_client))
     }
 
     /// List the first `limit` messages that match the given query.

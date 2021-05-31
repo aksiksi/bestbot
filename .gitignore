@@ -2,6 +2,6 @@
 *.json
 NOTES.md
 CODE.md
-config.toml
+/config.toml
 tmp_venv
 demo.py

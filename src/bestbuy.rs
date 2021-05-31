@@ -394,7 +394,7 @@ impl BestBuyApi {
 #[derive(Clone)]
 struct WebdriverBot<'c, 'g> {
     client: fantoccini::Client,
-    gmail_client: &'g GmailClient,
+    gmail_client: Option<&'g GmailClient>,
     config: &'c Config,
 }
 
@@ -406,7 +406,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
     const VERIFICATION_CODE_FORM: &'static str = r#"form.cia-form"#;
 
     fn new(client: fantoccini::Client,
-           gmail_client: &'g GmailClient,
+           gmail_client: Option<&'g GmailClient>,
            config: &'c Config) -> Self {
         Self {
             client,
@@ -431,14 +431,15 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 
     /// Get latest email code using Gmail API
     async fn get_email_code(&self) -> Result<String> {
-        let username = &self.config.bestbuy.as_ref().unwrap().username;
+        let username = &self.config.general.gmail_user.as_ref().expect("Gmail client not provided...");
+        let client = self.gmail_client.unwrap();
 
-        let messages = self.gmail_client
+        let messages = client
             .list_messages(&username, "BestBuy", None)
             .await?;
         let latest_message = messages[0].id.as_ref().unwrap();
 
-        let body = self.gmail_client.get_message_body(&username, latest_message).await?;
+        let body = client.get_message_body(&username, latest_message).await?;
         let code_pat = Regex::new(EMAIL_CODE_PAT)?;
         let code = code_pat.captures(&body).unwrap().get(1).unwrap().as_str().to_owned();
 
@@ -521,7 +522,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 /// all available to the cart before checking out.
 pub struct BestBuyBot<'c, 'g, 't> {
     skus: VecDeque<String>,
-    gmail_client: &'g GmailClient,
+    gmail_client: Option<&'g GmailClient>,
     api_client: Option<BestBuyApi>,
     config: &'c Config,
     twilio_client: Option<&'t TwilioClient>,
@@ -531,7 +532,7 @@ pub struct BestBuyBot<'c, 'g, 't> {
 
 impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
     pub fn new(config: &'c Config,
-               gmail_client: &'g GmailClient,
+               gmail_client: Option<&'g GmailClient>,
                twilio_client: Option<&'t TwilioClient>,
                discord_webhook: Option<&'t DiscordWebhook>) -> Self {
         let bestbuy = config.bestbuy.as_ref().expect("BestBuy config is not present!");

@@ -1,0 +1,24 @@
+[general]
+interval = 10 # Defaults to 30 seconds
+hostname = "127.0.0.1" # Optional, for WebDriver
+working_dir = "/path/to/dir" # Optional, defaults to current directory
+gmail_user = "my.email@gmail.com" # Optional for: BestBuy
+
+[bestbuy]
+username = "abcdefg@gmail.com"
+password = "abcdefg"
+skus = [
+    "6426149", # PS5
+    "6437121", # iPhone charger
+]
+
+# Optional
+[twilio]
+sid = "SID"
+auth_token = "AUTH_TOKEN"
+from_number = "+15555555555"
+to_number = "+15555555556"
+
+# Optional
+[discord]
+webhook_url = "https://discord.com/api/webhooks/REST_OF_URL"
