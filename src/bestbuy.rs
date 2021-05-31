@@ -431,7 +431,7 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 
     /// Get latest email code using Gmail API
     async fn get_email_code(&self) -> Result<String> {
-        let username = &self.config.login.as_ref().unwrap().username;
+        let username = &self.config.bestbuy.as_ref().unwrap().username;
 
         let messages = self.gmail_client
             .list_messages(&username, "BestBuy", None)
@@ -475,8 +475,8 @@ impl<'c, 'g> WebdriverBot<'c, 'g> {
 
     /// Sign in to BestBuy and return the list of cookies
     async fn sign_in(&mut self) -> Result<Vec<Cookie<'_>>> {
-        let username = &self.config.login.as_ref().unwrap().username;
-        let password = &self.config.login.as_ref().unwrap().password;
+        let username = &self.config.bestbuy.as_ref().unwrap().username;
+        let password = &self.config.bestbuy.as_ref().unwrap().password;
 
         log::debug!("Signing in...");
 
@@ -534,7 +534,10 @@ impl<'c, 'g, 't> BestBuyBot<'c, 'g, 't> {
                gmail_client: &'g GmailClient,
                twilio_client: Option<&'t TwilioClient>,
                discord_webhook: Option<&'t DiscordWebhook>) -> Self {
-        let skus = VecDeque::from_iter(config.general.products.to_owned().into_iter());
+        let bestbuy = config.bestbuy.as_ref().expect("BestBuy config is not present!");
+        let skus = VecDeque::from_iter(bestbuy.skus.to_owned().into_iter());
+
+        assert!(skus.len() == 0, "No BestBuy SKUs specified");
 
         Self {
             config,
